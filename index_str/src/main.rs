@@ -10,8 +10,10 @@ fn main() {
 
 fn index_words(text: &str) -> HashMap<&str, Vec<usize>> {
     let mut map: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (index, word) in text.split_whitespace().enumerate() {
-        map.entry(word).or_default().push(index);
+    let mut i = 0;
+    for word in text.split_whitespace() {
+        map.entry(word).or_default().push(i);
+        i += word.len() + 1;
     }
     return map;
 }
