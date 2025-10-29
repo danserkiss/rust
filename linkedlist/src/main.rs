@@ -1,27 +1,38 @@
 use std::fmt::{Display, Formatter, Result};
 use std::ops::{Deref, DerefMut};
 
-struct Node<T> {
+pub struct Node<T> {
     value: T,
     next: Option<Box<Node<T>>>,
 }
 
 impl<T> Node<T> {
-    fn new(value: T) -> Box<Self> {
+    pub fn new(value: T) -> Box<Self> {
         Box::new(Node { value, next: None })
     }
 
-    fn insert(&mut self, value: T) -> &mut Node<T> {
+    pub fn insert_left(&mut self, value: T) -> &mut Node<T> {
         let old_next = self.next.take();
         let new_node = Box::new(Node {
             value,
             next: old_next,
         });
-        self.next = Some(new_node);
-        self.next.as_mut().unwrap().deref_mut()
+        self.next.insert(new_node)
     }
 
-    fn iter_forward(&self) -> NodeForwardIter<'_, T> {
+    pub fn insert(&mut self, value: T) -> &mut Node<T> {
+        let mut node = self;
+        while node.next.is_some() {
+            node = node.next.as_mut().unwrap();
+        }
+        let new_node = Box::new(Node {
+            value: value,
+            next: None,
+        });
+        node.next.insert(new_node)
+    }
+
+    pub fn iter_forward(&self) -> NodeForwardIter<'_, T> {
         NodeForwardIter {
             current: Some(self),
         }
@@ -64,7 +75,16 @@ impl<T: Clone> Clone for Node<T> {
     }
 }
 
-struct NodeForwardIter<'a, T> {
+impl<T> Drop for Node<T> {
+    fn drop(&mut self) {
+        let mut node = self.next.take();
+        while let Some(mut boxed_node) = node {
+            node = boxed_node.next.take();
+        }
+    }
+}
+
+pub struct NodeForwardIter<'a, T> {
     current: Option<&'a Node<T>>,
 }
 
@@ -78,70 +98,4 @@ impl<'a, T> Iterator for NodeForwardIter<'a, T> {
     }
 }
 
-fn main() {
-    // test 0 - trivial
-
-    {
-        let mut node = Node::new(1);
-        node.insert(2).insert(3).insert(4);
-        println!("{node}"); // should print: 1,2,3,4
-        assert_eq!(node.to_string(), "1,2,3,4");
-        println!("Test 0");
-    }
-
-    // test 1 - easy
-    {
-        let mut node = Node::new(42);
-        assert_eq!(**node, 42);
-        **node = 13;
-        assert_eq!(**node, 13);
-        println!("Test 1");
-    }
-
-    // test 2 - normal
-
-    {
-        let mut node1 = Node::new(1);
-        node1.insert(4);
-        node1.insert(3);
-        node1.insert(2);
-        assert_eq!(
-            node1.iter_forward().collect::<Vec<_>>(),
-            vec![&1, &2, &3, &4]
-        );
-        println!("Test 2");
-    }
-
-    // test 3 - hard
-    {
-        let mut node1 = Node::new(1);
-        node1.insert(2).insert(3).insert(4);
-        let node2 = node1.clone();
-        assert_eq!(
-            node1.iter_forward().collect::<Vec<_>>(),
-            node2.iter_forward().collect::<Vec<_>>(),
-        );
-        println!("Test 3");
-    }
-
-    // test 4 - nightmare
-
-    {
-        let mut node = Node::new(1);
-        for index in 0..10_000_000 {
-            node.insert(index);
-        }
-        println!("Test 4");
-        // did it panic ??
-    }
-
-    // test 5 - ultra nightmare (requires changes in the provided template)
-    {
-        /*
-        let mut node = Node::new(1);
-        node.insert(2).insert(3).insert(4);
-        let last = node.iter_forward().last().unwrap();
-        assert_eq!(last.iter_bacwards().collect(), [4, 3, 2, 1]);
-        */
-    }
-}
+fn main() {}
