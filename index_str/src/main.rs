@@ -1,10 +1,11 @@
 use clap::Parser;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::sync::Arc;
 use std::sync::Mutex;
 
 #[derive(Parser, Debug)]
@@ -16,7 +17,7 @@ struct Args {
     #[arg(short, long)]
     max_th: usize,
 }
-
+#[derive(Debug, Serialize, Deserialize)]
 struct MyMap {
     map: HashMap<String, HashMap<String, Vec<usize>>>,
 }
@@ -53,15 +54,14 @@ fn main() {
     let args = Args::parse();
     let mut path_buf: Vec<String> = Vec::new();
     collet_files(&args.path, &mut path_buf);
-    let tasks = Arc::new(Mutex::new(path_buf.into_iter()));
-    let result = Arc::new(Mutex::new(Vec::new()));
+    let tasks = Mutex::new(path_buf.into_iter());
+    let result = Mutex::new(Vec::new());
 
     std::thread::scope(|scope| {
-        let mut handles = Vec::new();
         for _ in 0..args.max_th {
-            let tasks_cl = Arc::clone(&tasks);
-            let result_cl = Arc::clone(&result);
-            let handle = scope.spawn(move || {
+            let tasks_cl = &tasks;
+            let result_cl = &result;
+            let _ = scope.spawn(move || {
                 let mut th_res = Vec::new();
                 loop {
                     let next_task = {
@@ -81,10 +81,6 @@ fn main() {
                 let mut result_guard = result_cl.lock().unwrap();
                 result_guard.extend(th_res);
             });
-            handles.push(handle);
-        }
-        for handle in handles {
-            handle.join().unwrap();
         }
     });
 
@@ -93,8 +89,9 @@ fn main() {
         mymap.merge(i.map.clone());
     }
     let mut file = File::create("index_result.json").unwrap();
-    println!("{}", mymap);
-    let _ = writeln!(file, "{}", mymap);
+    println!("{}\n", mymap);
+    let json = serde_json::to_string(&mymap);
+    let _ = writeln!(file, "{}", json.unwrap());
 }
 fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     let directory = fs::read_dir(path);
