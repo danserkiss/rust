@@ -6,7 +6,7 @@ use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::sync::Mutex;
+// use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -49,50 +49,29 @@ impl fmt::Display for MyMap {
         Ok(())
     }
 }
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
+    let mut handles = Vec::new();
     let mut path_buf: Vec<String> = Vec::new();
-    collet_files(&args.path, &mut path_buf);
-    let tasks = Mutex::new(path_buf.into_iter());
-    let result = Mutex::new(Vec::new());
-
-    std::thread::scope(|scope| {
-        for _ in 0..args.max_th {
-            let tasks_cl = &tasks;
-            let result_cl = &result;
-            let _ = scope.spawn(move || {
-                let mut th_res = Vec::new();
-                loop {
-                    let next_task = {
-                        let mut task_guard = tasks_cl.lock().unwrap();
-                        task_guard.next()
-                    };
-                    match next_task {
-                        Some(task_data) => {
-                            let result = index_file(task_data.as_str());
-                            th_res.push(result);
-                        }
-                        None => {
-                            break;
-                        }
-                    }
-                }
-                let mut result_guard = result_cl.lock().unwrap();
-                result_guard.extend(th_res);
-            });
-        }
-    });
-
     let mut mymap: MyMap = MyMap::new();
-    for i in result.lock().unwrap().iter() {
-        mymap.merge(i.map.clone());
+
+    // let mut res = Vec::new();
+    collet_files(&args.path, &mut path_buf);
+    for i in path_buf.into_iter() {
+        let handle = tokio::spawn(async move { index_file(i.as_str()).await });
+        handles.push(handle);
     }
+    for handle in handles {
+        mymap.merge(handle.await.unwrap().map);
+    }
+
     let mut file = File::create("index_result.json").unwrap();
     println!("{}\n", mymap);
     let json = serde_json::to_string(&mymap);
     let _ = writeln!(file, "{}", json.unwrap());
 }
+
 fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     let directory = fs::read_dir(path);
     if directory.is_ok() {
@@ -121,19 +100,22 @@ fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     }
 }
 
-fn index_file(path: &str) -> MyMap {
+async fn index_file(path: &str) -> MyMap {
+    // println!("Before sleep");
+    // tokio::time::sleep(Duration::from_secs(1)).await;
+    // println!("After sleep");
     let mut mymap = MyMap::new();
     let vec: Vec<&str> = path.rsplit('/').collect();
 
-    let contents = fs::read_to_string(&path); // read from file to str
+    let contents = tokio::fs::read_to_string(&path).await; // read from file to str
     if contents.is_ok() {
         let text = contents.unwrap();
-        mymap = index_words(&text, vec[0], mymap);
+        mymap = index_words(&text, vec[0], mymap).await;
     }
     return mymap;
 }
 
-fn index_words(text: &str, filename: &str, mut mymap: MyMap) -> MyMap {
+async fn index_words(text: &str, filename: &str, mut mymap: MyMap) -> MyMap {
     let mut i = 0;
     for word in text.split_whitespace() {
         let word_map = mymap
