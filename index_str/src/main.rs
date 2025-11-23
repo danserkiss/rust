@@ -4,8 +4,9 @@ use serde_json;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::fs::File;
-use std::io::Write;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
+use tokio::task;
 // use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -14,8 +15,6 @@ struct Args {
     //Path to file
     #[arg(short, long)]
     path: String,
-    #[arg(short, long)]
-    max_th: usize,
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct MyMap {
@@ -52,27 +51,34 @@ impl fmt::Display for MyMap {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let mut handles = Vec::new();
     let mut path_buf: Vec<String> = Vec::new();
     let mut mymap: MyMap = MyMap::new();
 
-    // let mut res = Vec::new();
-    collet_files(&args.path, &mut path_buf);
+    collet_files(&args.path, &mut path_buf).await;
+    let (tx, mut rx) = mpsc::unbounded_channel::<MyMap>();
+    let handle = task::spawn(async move {
+        while let Some(_msg) = rx.recv().await {
+            mymap.merge(_msg.map);
+        }
+        mymap
+    });
     for i in path_buf.into_iter() {
-        let handle = tokio::spawn(async move { index_file(i.as_str()).await });
-        handles.push(handle);
+        let tx_clone = tx.clone();
+        let _ = tokio::spawn(async move {
+            let val = index_file(i.clone()).await;
+            let _ = tx_clone.send(val);
+        });
     }
-    for handle in handles {
-        mymap.merge(handle.await.unwrap().map);
-    }
+    drop(tx);
 
-    let mut file = File::create("index_result.json").unwrap();
+    mymap = handle.await.unwrap();
+    let mut file = tokio::fs::File::create("index_result.json").await.unwrap();
     println!("{}\n", mymap);
-    let json = serde_json::to_string(&mymap);
-    let _ = writeln!(file, "{}", json.unwrap());
+    let json = serde_json::to_string(&mymap).unwrap();
+    file.write(json.as_bytes()).await.unwrap();
 }
 
-fn collet_files(path: &String, path_buf: &mut Vec<String>) {
+async fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     let directory = fs::read_dir(path);
     if directory.is_ok() {
         //dir
@@ -86,7 +92,7 @@ fn collet_files(path: &String, path_buf: &mut Vec<String>) {
                 if let Ok(filetype) = file.file_type() {
                     if filetype.is_dir() {
                         let mut rec_vec = Vec::new();
-                        collet_files(&fullpath, &mut rec_vec);
+                        Box::pin(collet_files(&fullpath, &mut rec_vec)).await;
                         path_buf.append(&mut rec_vec);
                     } else if filetype.is_file() {
                         path_buf.push(fullpath);
@@ -100,7 +106,7 @@ fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     }
 }
 
-async fn index_file(path: &str) -> MyMap {
+async fn index_file(path: String) -> MyMap {
     // println!("Before sleep");
     // tokio::time::sleep(Duration::from_secs(1)).await;
     // println!("After sleep");
