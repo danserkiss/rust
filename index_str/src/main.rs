@@ -1,11 +1,13 @@
 use clap::Parser;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::fs::File;
-use std::io::Write;
-use std::sync::Arc;
-use std::sync::Mutex;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
+use tokio::task;
+// use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -13,10 +15,8 @@ struct Args {
     //Path to file
     #[arg(short, long)]
     path: String,
-    #[arg(short, long)]
-    max_th: usize,
 }
-
+#[derive(Debug, Serialize, Deserialize)]
 struct MyMap {
     map: HashMap<String, HashMap<String, Vec<usize>>>,
 }
@@ -48,55 +48,37 @@ impl fmt::Display for MyMap {
         Ok(())
     }
 }
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
     let mut path_buf: Vec<String> = Vec::new();
-    collet_files(&args.path, &mut path_buf);
-    let tasks = Arc::new(Mutex::new(path_buf.into_iter()));
-    let result = Arc::new(Mutex::new(Vec::new()));
-
-    std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for _ in 0..args.max_th {
-            let tasks_cl = Arc::clone(&tasks);
-            let result_cl = Arc::clone(&result);
-            let handle = scope.spawn(move || {
-                let mut th_res = Vec::new();
-                loop {
-                    let next_task = {
-                        let mut task_guard = tasks_cl.lock().unwrap();
-                        task_guard.next()
-                    };
-                    match next_task {
-                        Some(task_data) => {
-                            let result = index_file(task_data.as_str());
-                            th_res.push(result);
-                        }
-                        None => {
-                            break;
-                        }
-                    }
-                }
-                let mut result_guard = result_cl.lock().unwrap();
-                result_guard.extend(th_res);
-            });
-            handles.push(handle);
-        }
-        for handle in handles {
-            handle.join().unwrap();
-        }
-    });
-
     let mut mymap: MyMap = MyMap::new();
-    for i in result.lock().unwrap().iter() {
-        mymap.merge(i.map.clone());
+
+    collet_files(&args.path, &mut path_buf).await;
+    let (tx, mut rx) = mpsc::unbounded_channel::<MyMap>();
+    let handle = task::spawn(async move {
+        while let Some(_msg) = rx.recv().await {
+            mymap.merge(_msg.map);
+        }
+        mymap
+    });
+    for i in path_buf.into_iter() {
+        let tx_clone = tx.clone();
+        let _ = tokio::spawn(async move {
+            let val = index_file(i.clone()).await;
+            let _ = tx_clone.send(val);
+        });
     }
-    let mut file = File::create("index_result.json").unwrap();
-    println!("{}", mymap);
-    let _ = writeln!(file, "{}", mymap);
+    drop(tx);
+
+    mymap = handle.await.unwrap();
+    let mut file = tokio::fs::File::create("index_result.json").await.unwrap();
+    println!("{}\n", mymap);
+    let json = serde_json::to_string(&mymap).unwrap();
+    file.write(json.as_bytes()).await.unwrap();
 }
-fn collet_files(path: &String, path_buf: &mut Vec<String>) {
+
+async fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     let directory = fs::read_dir(path);
     if directory.is_ok() {
         //dir
@@ -110,7 +92,7 @@ fn collet_files(path: &String, path_buf: &mut Vec<String>) {
                 if let Ok(filetype) = file.file_type() {
                     if filetype.is_dir() {
                         let mut rec_vec = Vec::new();
-                        collet_files(&fullpath, &mut rec_vec);
+                        Box::pin(collet_files(&fullpath, &mut rec_vec)).await;
                         path_buf.append(&mut rec_vec);
                     } else if filetype.is_file() {
                         path_buf.push(fullpath);
@@ -124,19 +106,22 @@ fn collet_files(path: &String, path_buf: &mut Vec<String>) {
     }
 }
 
-fn index_file(path: &str) -> MyMap {
+async fn index_file(path: String) -> MyMap {
+    // println!("Before sleep");
+    // tokio::time::sleep(Duration::from_secs(1)).await;
+    // println!("After sleep");
     let mut mymap = MyMap::new();
     let vec: Vec<&str> = path.rsplit('/').collect();
 
-    let contents = fs::read_to_string(&path); // read from file to str
+    let contents = tokio::fs::read_to_string(&path).await; // read from file to str
     if contents.is_ok() {
         let text = contents.unwrap();
-        mymap = index_words(&text, vec[0], mymap);
+        mymap = index_words(&text, vec[0], mymap).await;
     }
     return mymap;
 }
 
-fn index_words(text: &str, filename: &str, mut mymap: MyMap) -> MyMap {
+async fn index_words(text: &str, filename: &str, mut mymap: MyMap) -> MyMap {
     let mut i = 0;
     for word in text.split_whitespace() {
         let word_map = mymap
