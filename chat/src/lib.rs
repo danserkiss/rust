@@ -1,16 +1,14 @@
-use anyhow::{Context, Ok, Result};
-use bytes::{BufMut, BytesMut};
+use anyhow::Context;
+use anyhow::Result;
+pub use bytes::{Buf, BufMut, BytesMut};
 pub use clap::Parser;
-use serde::{Deserialize, Serialize};
+use std::result::Result::Ok;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 pub use tracing::{debug, error, info};
+mod message;
+pub use message::{ChatMessage, Message, UserAddr};
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Message {
-    pub addr: String,
-    pub msg: String,
-}
 pub async fn rd_sock_to_string(sock_read: &mut OwnedReadHalf) -> Result<String> {
     let len = sock_read.read_u32().await?;
     let mut json_buf = vec![0; len as usize];
