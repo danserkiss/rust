@@ -7,6 +7,7 @@ pub enum Message {
     UserJoined(UserAddr),
     UserLeft(UserAddr),
     ChatMessage(ChatMessage),
+    Kick,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ChatMessage {
